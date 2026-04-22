@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run-only script for a working Arch Linux + ROCm + source-built vLLM setup.
+# Assumes:
+# - conda env already exists and is working
+# - vLLM was already source-built
+# - Hugging Face auth was already completed
+#
+# Usage:
+#   bash vllm_gemma_run_only.sh
+#
+# Optional env vars:
+#   ENV_NAME=vllm-src
+#   MODEL_ID=google/gemma-4-E4B-it
+#   MAX_MODEL_LEN=1024
+#   GPU_MEMORY_UTILIZATION=0.95
+#   HOST=0.0.0.0
+#   PORT=8000
+#   TENSOR_PARALLEL_SIZE=1
+
+ENV_NAME="${ENV_NAME:-vllm-src}"
+MODEL_ID="${MODEL_ID:-google/gemma-4-E4B-it}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-1024}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
+
+MINICONDA_SH="${HOME}/miniconda3/etc/profile.d/conda.sh"
+if [[ ! -f "$MINICONDA_SH" ]]; then
+  echo "[ERROR] Miniconda not found at: $MINICONDA_SH"
+  exit 1
+fi
+
+source "$MINICONDA_SH"
+conda activate "$ENV_NAME"
+
+export LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:${LD_LIBRARY_PATH:-}
+export CMAKE_PREFIX_PATH=/opt/rocm:/opt/rocm/lib/cmake:${CMAKE_PREFIX_PATH:-}
+export ROCM_PATH=/opt/rocm
+export HIP_PATH=/opt/rocm
+export VLLM_TARGET_DEVICE=rocm
+export PYTORCH_ROCM_ARCH=gfx1100
+export VLLM_LOGGING_LEVEL=DEBUG
+
+python - <<'PY'
+import torch, vllm, amdsmi
+from vllm.platforms import current_platform
+print('torch:', torch.__version__)
+print('hip:', torch.version.hip)
+print('gpu available:', torch.cuda.is_available())
+if torch.cuda.is_available():
+    print('gpu:', torch.cuda.get_device_name(0))
+print('vllm:', vllm.__version__)
+print('platform:', current_platform.device_type if current_platform else 'unknown')
+print('amdsmi: ok')
+PY
+
+exec vllm serve "$MODEL_ID" \
+  --host "$HOST" \
+  --port "$PORT" \
+  --dtype bfloat16 \
+  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+  --max-model-len "$MAX_MODEL_LEN" \
+  --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
